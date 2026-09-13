@@ -78,6 +78,19 @@ ser tuyo, con `rol = gerencia`, para poder administrar todo desde la app
 
 ---
 
+## Actualizando un proyecto que ya tenías funcionando
+
+Si ya habías publicado la versión anterior, no hace falta volver a hacer
+todo desde cero. Solo:
+
+1. Ve a Supabase → **SQL Editor**. Si todavía no habías corrido
+   `migracion_facturacion.sql`, pégalo y dale **Run**. Luego, en cualquier
+   caso, pega también el contenido de `migracion_fecha_entrega.sql` y
+   dale **Run** — agrega la columna de fecha límite de entrega.
+2. Sube los archivos actualizados (sobre todo `src/App.jsx`) a tu mismo
+   repositorio de GitHub, reemplazando los anteriores.
+3. Vercel va a volver a publicar la app automáticamente en 1-2 minutos.
+
 ## Qué incluye esta versión
 
 - **Inicio de sesión** por correo y contraseña, uno por empleado.
@@ -90,6 +103,20 @@ ser tuyo, con `rol = gerencia`, para poder administrar todo desde la app
 - **Inventario de prendas por colección**: cada vez que se registra una
   producción, además de descontar insumos, se suma automáticamente al stock
   de prendas terminadas por talla y taller.
+- **Entregas y facturación**: cada receta tiene un precio de confección; al
+  marcar una producción como "entregada", se acumula en la cuenta pendiente
+  del taller. Gerencia (o el taller) genera una factura consolidada, y se
+  deja constancia del pago con una firma dibujada en pantalla o con un
+  botón de confirmación con nombre y fecha.
+- **Fecha límite de entrega**: opcional al registrar producción; si se
+  vence sin marcarse como entregada, aparece resaltada en rojo tanto en el
+  Resumen como en "Entregas y facturación".
+- **Búsqueda**: en Inventario (por nombre, color o tipo) y al elegir la
+  prenda en Producción, para cuando la lista crezca mucho.
+- **Autocompletado en recetas**: al definir qué insumos gasta una prenda,
+  se puede elegir directamente de los insumos ya registrados en cualquier
+  taller (en vez de escribirlos de nuevo), evitando errores de escritura
+  que impedirían el descuento automático al producir.
 - **Dashboard con alertas** de insumos por debajo del mínimo.
 - **Historial** de entradas y producciones.
 - **Reportes en Excel y PDF** (pestaña "Reportes", solo gerencia): inventario

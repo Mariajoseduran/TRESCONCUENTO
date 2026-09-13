@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   LayoutDashboard, Building2, Package, Shirt, Factory, History,
   Plus, Trash2, Pencil, X, Check, AlertTriangle, ChevronRight,
-  LogOut, Camera, FileSpreadsheet, FileText, Layers,
+  LogOut, Camera, FileSpreadsheet, FileText, Layers, Receipt, Truck,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as XLSX from "xlsx";
@@ -31,11 +31,17 @@ const toInsumo = (r) => ({
   cantidad: Number(r.cantidad) || 0, unidad: r.unidad, stockMinimo: Number(r.stock_minimo) || 0,
   fotoUrl: r.foto_url || "",
 });
-const toPrenda = (r) => ({ id: r.id, nombre: r.nombre, coleccionId: r.coleccion_id || "", consumos: r.consumos || [] });
+const toPrenda = (r) => ({ id: r.id, nombre: r.nombre, coleccionId: r.coleccion_id || "", precioConfeccion: Number(r.precio_confeccion) || 0, consumos: r.consumos || [] });
 const toStock = (r) => ({ id: r.id, prendaId: r.prenda_id, tallerId: r.taller_id, talla: r.talla, cantidad: Number(r.cantidad) || 0 });
 const toMovimiento = (r) => ({
   id: r.id, fecha: r.fecha, tipo: r.tipo, tallerId: r.taller_id, prendaId: r.prenda_id,
-  detalle: r.detalle, items: r.items || [],
+  detalle: r.detalle, items: r.items || [], unidades: Number(r.unidades) || 0,
+  precioUnitario: Number(r.precio_unitario) || 0, monto: Number(r.monto) || 0,
+  entregado: !!r.entregado, entregadoAt: r.entregado_at, fechaEntrega: r.fecha_entrega || "", facturaId: r.factura_id || null,
+});
+const toFactura = (r) => ({
+  id: r.id, tallerId: r.taller_id, fecha: r.fecha, total: Number(r.total) || 0, estado: r.estado,
+  firmaDibujo: r.firma_dibujo || "", confirmadoNombre: r.confirmado_nombre || "", pagadaAt: r.pagada_at,
 });
 
 /* ---------- Primitivas de UI ---------- */
@@ -66,6 +72,65 @@ function Field({ label, children, width }) {
 const inputStyle = { fontFamily: SANS, fontSize: 13.5, padding: "7px 10px", borderRadius: 6, border: `1px solid ${C.border}`, background: "#fff", color: C.ink, outline: "none" };
 function TxtInput(props) { return <input {...props} style={{ ...inputStyle, ...(props.style || {}) }} />; }
 function SelInput(props) { return <select {...props} style={{ ...inputStyle, ...(props.style || {}) }}>{props.children}</select>; }
+
+/* ---------- Selector con búsqueda (para listas largas) ---------- */
+
+function SearchSelect({ value, onChange, options, placeholder, width }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const selected = options.find((o) => o.value === value);
+  const filtered = options.filter((o) => norm(o.label).includes(norm(query))).slice(0, 30);
+  return (
+    <div style={{ position: "relative", width: width || "auto" }}>
+      <TxtInput
+        value={open ? query : (selected ? selected.label : "")}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => { setQuery(""); setOpen(true); }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder={placeholder || "Buscar…"}
+        style={{ width: "100%" }}
+      />
+      {open && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: `1px solid ${C.border}`, borderRadius: 6, marginTop: 2, maxHeight: 220, overflowY: "auto", zIndex: 30, boxShadow: "0 6px 16px rgba(58,37,48,0.12)" }}>
+          {filtered.length === 0 && <div style={{ padding: "8px 10px", fontFamily: SANS, fontSize: 12.5, color: C.gray }}>Sin resultados</div>}
+          {filtered.map((o) => (
+            <div key={o.value} onMouseDown={() => { onChange(o.value); setOpen(false); }} style={{ padding: "8px 10px", fontFamily: SANS, fontSize: 12.5, color: C.ink, cursor: "pointer", background: o.value === value ? C.creamLight : "#fff" }}>
+              {o.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Autocompletar (texto libre + sugerencias de lo ya existente) ---------- */
+
+function Autocomplete({ value, onChange, onSelectSuggestion, suggestions, placeholder, width }) {
+  const [open, setOpen] = useState(false);
+  const filtered = value.trim() === "" ? suggestions.slice(0, 20) : suggestions.filter((s) => norm(s.label).includes(norm(value))).slice(0, 20);
+  return (
+    <div style={{ position: "relative", width: width || "auto" }}>
+      <TxtInput
+        value={value}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder={placeholder}
+        style={{ width: "100%" }}
+      />
+      {open && filtered.length > 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: `1px solid ${C.border}`, borderRadius: 6, marginTop: 2, maxHeight: 200, overflowY: "auto", zIndex: 30, boxShadow: "0 6px 16px rgba(58,37,48,0.12)" }}>
+          {filtered.map((s, i) => (
+            <div key={i} onMouseDown={() => { onSelectSuggestion(s); setOpen(false); }} style={{ padding: "8px 10px", fontFamily: SANS, fontSize: 12.5, color: C.ink, cursor: "pointer", borderBottom: i < filtered.length - 1 ? `1px solid ${C.border}` : "none" }}>
+              {s.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 function SectionTitle({ children, sub }) {
   return (
     <div style={{ marginBottom: 20 }}>
@@ -150,6 +215,7 @@ function Sidebar({ tab, setTab, perfil }) {
       { id: "prendas", label: "Prendas (recetas)", icon: Shirt },
     ] : []),
     { id: "produccion", label: "Producción", icon: Factory },
+    { id: "facturacion", label: "Entregas y facturación", icon: Receipt },
     ...(perfil.rol === "gerencia" ? [{ id: "stock_prendas", label: "Prendas por colección", icon: Shirt }] : []),
     { id: "historial", label: "Historial", icon: History },
     ...(perfil.rol === "gerencia" ? [{ id: "reportes", label: "Reportes", icon: FileSpreadsheet }] : []),
@@ -189,6 +255,8 @@ function Sidebar({ tab, setTab, perfil }) {
 
 function Dashboard({ talleres, insumos, prendas, movimientos, setTab, perfil }) {
   const bajoStock = insumos.filter((i) => i.stockMinimo > 0 && i.cantidad <= i.stockMinimo);
+  const hoy = new Date().toISOString().slice(0, 10);
+  const entregasVencidas = movimientos.filter((m) => m.tipo === "produccion" && !m.entregado && m.fechaEntrega && m.fechaEntrega < hoy);
   const recientes = [...movimientos].sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")).slice(0, 6);
   const stats = [
     { label: "Talleres", value: talleres.length },
@@ -207,6 +275,26 @@ function Dashboard({ talleres, insumos, prendas, movimientos, setTab, perfil }) 
           </div>
         ))}
       </div>
+
+      {entregasVencidas.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <h3 style={{ fontFamily: SANS, fontSize: 14, fontWeight: 600, color: C.ink, margin: 0 }}>Entregas vencidas</h3>
+            <Badge text={`${entregasVencidas.length}`} tone="danger" />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {entregasVencidas.map((m) => {
+              const taller = talleres.find((t) => t.id === m.tallerId);
+              return (
+                <div key={m.id} style={{ background: "#fff", border: `1px solid ${C.danger}`, borderRadius: 7, padding: "10px 12px", display: "flex", justifyContent: "space-between", fontFamily: SANS, fontSize: 13 }}>
+                  <span><strong>{m.detalle}</strong> — {taller ? taller.nombre : ""}</span>
+                  <span style={{ color: C.danger, fontWeight: 700 }}>Debía entregarse el {new Date(m.fechaEntrega + "T00:00:00").toLocaleDateString("es-CO")}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 20 }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
@@ -330,6 +418,7 @@ function TalleresTab({ talleres, insumos, onAdd, onEdit, onDelete }) {
 function InventarioTab({ talleres, insumos, perfil, onAddInsumo, onEditInsumo, onDeleteInsumo, onAddEntrada, onSubirFoto }) {
   const soloUnTaller = perfil.rol === "taller";
   const [tallerId, setTallerId] = useState(soloUnTaller ? perfil.tallerId : (talleres[0]?.id || ""));
+  const [busqueda, setBusqueda] = useState("");
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ tipo: "Tela", nombre: "", color: "", cantidad: "", unidad: "m", stockMinimo: "" });
   const [editingId, setEditingId] = useState(null);
@@ -341,7 +430,8 @@ function InventarioTab({ talleres, insumos, perfil, onAddInsumo, onEditInsumo, o
 
   useEffect(() => { if (!soloUnTaller && !tallerId && talleres[0]) setTallerId(talleres[0].id); }, [talleres]);
 
-  const lista = insumos.filter((i) => i.tallerId === tallerId);
+  const todosDelTaller = insumos.filter((i) => i.tallerId === tallerId);
+  const lista = todosDelTaller.filter((i) => busqueda.trim() === "" || norm(i.nombre).includes(norm(busqueda)) || norm(i.color).includes(norm(busqueda)) || norm(i.tipo).includes(norm(busqueda)));
 
   async function addInsumo() {
     if (!draft.nombre.trim() || !tallerId) return;
@@ -402,8 +492,14 @@ function InventarioTab({ talleres, insumos, perfil, onAddInsumo, onEditInsumo, o
             </div>
           )}
 
-          {lista.length === 0 ? <EmptyState text={`${tallerActual ? tallerActual.nombre : "Este taller"} todavía no tiene insumos registrados.`} /> : (
+          {todosDelTaller.length === 0 ? <EmptyState text={`${tallerActual ? tallerActual.nombre : "Este taller"} todavía no tiene insumos registrados.`} /> : (
             <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+              <div style={{ padding: "10px 12px", borderBottom: `1px solid ${C.border}` }}>
+                <TxtInput value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar por nombre, color o tipo…" style={{ width: 280 }} />
+              </div>
+              {lista.length === 0 ? (
+                <div style={{ padding: "18px 12px", fontFamily: SANS, fontSize: 13, color: C.gray, textAlign: "center" }}>Sin resultados para "{busqueda}".</div>
+              ) : (
               <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: SANS, fontSize: 13 }}>
                 <thead>
                   <tr style={{ background: C.creamLight, textAlign: "left" }}>
@@ -468,6 +564,7 @@ function InventarioTab({ talleres, insumos, perfil, onAddInsumo, onEditInsumo, o
                   })}
                 </tbody>
               </table>
+              )}
             </div>
           )}
         </>
@@ -524,12 +621,22 @@ function ColeccionesTab({ colecciones, onAdd, onDelete }) {
 
 function emptyConsumo() { return { key: Math.random().toString(36).slice(2), tipo: "Tela", nombre: "", color: "", cantidad: "", unidad: "m" }; }
 
-function PrendasTab({ prendas, colecciones, onAdd, onDelete }) {
+function PrendasTab({ prendas, colecciones, insumos, onAdd, onDelete }) {
   const [adding, setAdding] = useState(false);
   const [nombre, setNombre] = useState("");
   const [coleccionId, setColeccionId] = useState("");
+  const [precioConfeccion, setPrecioConfeccion] = useState("");
   const [consumos, setConsumos] = useState([emptyConsumo()]);
   const [expandedId, setExpandedId] = useState(null);
+
+  const insumoOptions = [];
+  const vistos = new Set();
+  insumos.forEach((i) => {
+    const key = `${i.tipo}|${norm(i.nombre)}|${norm(i.color)}`;
+    if (vistos.has(key)) return;
+    vistos.add(key);
+    insumoOptions.push({ tipo: i.tipo, nombre: i.nombre, color: i.color, unidad: i.unidad, label: `${i.nombre}${i.color ? " · " + i.color : ""} (${i.tipo})` });
+  });
 
   function addConsumoRow() { setConsumos([...consumos, emptyConsumo()]); }
   function updateConsumoRow(key, field, value) { setConsumos(consumos.map((c) => (c.key === key ? { ...c, [field]: value } : c))); }
@@ -538,8 +645,8 @@ function PrendasTab({ prendas, colecciones, onAdd, onDelete }) {
   async function savePrenda() {
     const validConsumos = consumos.filter((c) => c.nombre.trim() && parseFloat(c.cantidad) > 0);
     if (!nombre.trim() || validConsumos.length === 0) return;
-    await onAdd(nombre.trim(), coleccionId || null, validConsumos.map((c) => ({ tipo: c.tipo, nombre: c.nombre.trim(), color: c.color.trim(), cantidad: parseFloat(c.cantidad), unidad: c.unidad })));
-    setNombre(""); setColeccionId(""); setConsumos([emptyConsumo()]); setAdding(false);
+    await onAdd(nombre.trim(), coleccionId || null, parseFloat(precioConfeccion) || 0, validConsumos.map((c) => ({ tipo: c.tipo, nombre: c.nombre.trim(), color: c.color.trim(), cantidad: parseFloat(c.cantidad), unidad: c.unidad })));
+    setNombre(""); setColeccionId(""); setPrecioConfeccion(""); setConsumos([emptyConsumo()]); setAdding(false);
   }
 
   return (
@@ -552,20 +659,30 @@ function PrendasTab({ prendas, colecciones, onAdd, onDelete }) {
       {adding && (
         <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 8, padding: 16, marginBottom: 16 }}>
           <div style={{ display: "flex", gap: 12 }}>
-            <Field label="Nombre de la prenda" width={280}><TxtInput value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Camisa Emilia" /></Field>
-            <Field label="Colección (opcional)" width={220}>
+            <Field label="Nombre de la prenda" width={240}><TxtInput value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Camisa Emilia" /></Field>
+            <Field label="Colección (opcional)" width={200}>
               <SelInput value={coleccionId} onChange={(e) => setColeccionId(e.target.value)}>
                 <option value="">Sin colección</option>
                 {colecciones.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
               </SelInput>
             </Field>
+            <Field label="Precio de confección" width={160}><TxtInput type="number" value={precioConfeccion} onChange={(e) => setPrecioConfeccion(e.target.value)} placeholder="$ por unidad" /></Field>
           </div>
           <div style={{ marginTop: 14, marginBottom: 6, fontFamily: SANS, fontSize: 12.5, color: C.gray }}>Consumo de insumos por unidad producida (1 prenda)</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {consumos.map((c) => (
               <div key={c.key} style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
                 <Field label="Tipo" width={110}><SelInput value={c.tipo} onChange={(e) => updateConsumoRow(c.key, "tipo", e.target.value)}>{TIPOS.map((t) => <option key={t}>{t}</option>)}</SelInput></Field>
-                <Field label="Nombre del insumo" width={160}><TxtInput value={c.nombre} onChange={(e) => updateConsumoRow(c.key, "nombre", e.target.value)} placeholder="Algodón Primatela" /></Field>
+                <Field label="Nombre del insumo" width={190}>
+                  <Autocomplete
+                    value={c.nombre}
+                    onChange={(v) => updateConsumoRow(c.key, "nombre", v)}
+                    suggestions={insumoOptions.filter((o) => o.tipo === c.tipo)}
+                    onSelectSuggestion={(o) => setConsumos(consumos.map((row) => (row.key === c.key ? { ...row, nombre: o.nombre, color: o.color, unidad: o.unidad } : row)))}
+                    placeholder="Escribe o elige de tu inventario"
+                    width="100%"
+                  />
+                </Field>
                 <Field label="Color" width={110}><TxtInput value={c.color} onChange={(e) => updateConsumoRow(c.key, "color", e.target.value)} placeholder="Azul" /></Field>
                 <Field label="Cant. por unidad" width={100}><TxtInput type="number" step="0.01" value={c.cantidad} onChange={(e) => updateConsumoRow(c.key, "cantidad", e.target.value)} placeholder="1.5" /></Field>
                 <Field label="Unidad" width={80}><SelInput value={c.unidad} onChange={(e) => updateConsumoRow(c.key, "unidad", e.target.value)}>{UNIDADES.map((u) => <option key={u}>{u}</option>)}</SelInput></Field>
@@ -591,7 +708,9 @@ function PrendasTab({ prendas, colecciones, onAdd, onDelete }) {
                 <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => setExpandedId(expanded ? null : p.id)}>
                   <div>
                     <div style={{ fontFamily: SANS, fontWeight: 600, fontSize: 14, color: C.ink }}>{p.nombre}</div>
-                    {col && <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.gray }}>{col.nombre}</div>}
+                    <div style={{ fontFamily: SANS, fontSize: 11.5, color: C.gray }}>
+                      {col ? col.nombre + " · " : ""}{p.precioConfeccion > 0 ? `$${p.precioConfeccion.toLocaleString("es-CO")} confección` : "Sin precio de confección"}
+                    </div>
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <span style={{ fontFamily: SANS, fontSize: 12, color: C.gray }}>{p.consumos.length} insumo{p.consumos.length !== 1 ? "s" : ""}</span>
@@ -623,6 +742,7 @@ function ProduccionTab({ talleres, insumos, prendas, perfil, onRegistrar }) {
   const soloUnTaller = perfil.rol === "taller";
   const [tallerId, setTallerId] = useState(soloUnTaller ? perfil.tallerId : (talleres[0]?.id || ""));
   const [prendaId, setPrendaId] = useState(prendas[0]?.id || "");
+  const [fechaEntrega, setFechaEntrega] = useState("");
   const [curva, setCurva] = useState(Object.fromEntries(TALLAS.map((t) => [t, ""])));
   const [confirmando, setConfirmando] = useState(false);
   const [registrado, setRegistrado] = useState(null);
@@ -659,9 +779,12 @@ function ProduccionTab({ talleres, insumos, prendas, perfil, onRegistrar }) {
     const curvaPorTalla = TALLAS.map((t) => ({ talla: t, cantidad: parseFloat(curva[t]) || 0 })).filter((c) => c.cantidad > 0);
     const curvaTexto = curvaPorTalla.map((c) => `${c.talla}:${c.cantidad}`).join(" ");
     const detalle = `Producción de ${totalUnidades} · ${prenda.nombre} (${curvaTexto})`;
-    await onRegistrar({ tallerId, prendaId, detalle, items, updates, curvaPorTalla });
-    setRegistrado(detalle);
+    const precioUnitario = prenda.precioConfeccion || 0;
+    const monto = round2(precioUnitario * totalUnidades);
+    await onRegistrar({ tallerId, prendaId, detalle, items, updates, curvaPorTalla, unidades: totalUnidades, precioUnitario, monto, fechaEntrega: fechaEntrega || null });
+    setRegistrado({ detalle, monto });
     setCurva(Object.fromEntries(TALLAS.map((t) => [t, ""])));
+    setFechaEntrega("");
     setConfirmando(false);
   }
 
@@ -685,10 +808,17 @@ function ProduccionTab({ talleres, insumos, prendas, perfil, onRegistrar }) {
             </SelInput>
           </Field>
         )}
-        <Field label="Prenda" width={220}>
-          <SelInput value={prendaId} onChange={(e) => { setPrendaId(e.target.value); setRegistrado(null); }}>
-            {prendas.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-          </SelInput>
+        <Field label="Prenda" width={260}>
+          <SearchSelect
+            value={prendaId}
+            onChange={(v) => { setPrendaId(v); setRegistrado(null); }}
+            options={prendas.map((p) => ({ value: p.id, label: p.nombre }))}
+            placeholder="Buscar prenda…"
+            width="100%"
+          />
+        </Field>
+        <Field label="Fecha límite de entrega (opcional)" width={200}>
+          <TxtInput type="date" value={fechaEntrega} onChange={(e) => { setFechaEntrega(e.target.value); setRegistrado(null); }} />
         </Field>
       </div>
 
@@ -737,12 +867,227 @@ function ProduccionTab({ talleres, insumos, prendas, perfil, onRegistrar }) {
           )}
         </>
       )}
-      {registrado && <div style={{ marginTop: 18, background: C.okBg, color: C.ok, padding: "12px 16px", borderRadius: 8, fontFamily: SANS, fontSize: 13 }}>Producción registrada. El inventario y el stock de prendas se actualizaron automáticamente.</div>}
+      {registrado && (
+        <div style={{ marginTop: 18, background: C.okBg, color: C.ok, padding: "12px 16px", borderRadius: 8, fontFamily: SANS, fontSize: 13 }}>
+          Producción registrada. El inventario y el stock de prendas se actualizaron automáticamente.
+          {registrado.monto > 0 && <> Cuando el taller entregue las prendas, márcalo en "Entregas y facturación" — este lote suma <strong>${registrado.monto.toLocaleString("es-CO")}</strong> a su cuenta.</>}
+        </div>
+      )}
     </div>
   );
 }
 
-/* ---------- Stock de prendas por colección (solo gerencia) ---------- */
+/* ---------- Firma dibujada ---------- */
+
+function SignaturePad({ onSave, saveLabel }) {
+  const canvasRef = useRef(null);
+  const drawingRef = useRef(false);
+  const hasDrawnRef = useRef(false);
+
+  function getPos(e) {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const t = e.touches && e.touches[0];
+    const clientX = t ? t.clientX : e.clientX;
+    const clientY = t ? t.clientY : e.clientY;
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  }
+  function start(e) {
+    drawingRef.current = true;
+    const { x, y } = getPos(e);
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  }
+  function move(e) {
+    if (!drawingRef.current) return;
+    e.preventDefault();
+    const { x, y } = getPos(e);
+    const ctx = canvasRef.current.getContext("2d");
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = C.ink;
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = "round";
+    ctx.stroke();
+    hasDrawnRef.current = true;
+  }
+  function end() { drawingRef.current = false; }
+  function limpiar() {
+    const canvas = canvasRef.current;
+    canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    hasDrawnRef.current = false;
+  }
+  function guardar() {
+    if (!hasDrawnRef.current) return;
+    onSave(canvasRef.current.toDataURL("image/png"));
+  }
+
+  return (
+    <div>
+      <canvas
+        ref={canvasRef} width={420} height={140}
+        style={{ border: `1px dashed ${C.border}`, borderRadius: 8, background: "#fff", touchAction: "none", cursor: "crosshair", width: "100%", maxWidth: 420 }}
+        onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+        onTouchStart={start} onTouchMove={move} onTouchEnd={end}
+      />
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <Btn variant="ghost" onClick={limpiar}>Limpiar</Btn>
+        <Btn variant="primary" onClick={guardar}>{saveLabel || "Guardar firma y marcar pagada"}</Btn>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Entregas y facturación ---------- */
+
+function FacturacionTab({ talleres, prendas, movimientos, facturas, perfil, onMarcarEntregado, onGenerarFactura, onMarcarPagada }) {
+  const [tallerId, setTallerId] = useState(perfil.rol === "taller" ? perfil.tallerId : (talleres[0]?.id || ""));
+  const [facturaAbierta, setFacturaAbierta] = useState(null);
+  const [nombreConfirma, setNombreConfirma] = useState("");
+
+  useEffect(() => { if (perfil.rol !== "taller" && !tallerId && talleres[0]) setTallerId(talleres[0].id); }, [talleres]);
+
+  const producciones = movimientos.filter((m) => m.tipo === "produccion" && m.tallerId === tallerId);
+  const porEntregar = producciones.filter((m) => !m.entregado);
+  const entregadasSinFacturar = producciones.filter((m) => m.entregado && !m.facturaId);
+  const totalPendiente = round2(entregadasSinFacturar.reduce((s, m) => s + (m.monto || 0), 0));
+  const facturasTaller = facturas.filter((f) => f.tallerId === tallerId).sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+
+  async function generar() {
+    if (entregadasSinFacturar.length === 0) return;
+    await onGenerarFactura(tallerId, entregadasSinFacturar.map((m) => m.id), totalPendiente);
+  }
+
+  const facturaSeleccionada = facturas.find((f) => f.id === facturaAbierta);
+  const itemsFactura = facturaSeleccionada ? movimientos.filter((m) => m.facturaId === facturaSeleccionada.id) : [];
+
+  return (
+    <div>
+      <SectionTitle sub="Marca las prendas entregadas, junta el cobro por taller y deja constancia del pago.">Entregas y facturación</SectionTitle>
+
+      {talleres.length > 1 && (
+        <Field label="Taller" width={260}>
+          <SelInput value={tallerId} onChange={(e) => { setTallerId(e.target.value); setFacturaAbierta(null); }}>
+            {talleres.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+          </SelInput>
+        </Field>
+      )}
+
+      <div style={{ marginTop: 16 }}>
+        <h3 style={{ fontFamily: SANS, fontSize: 14, fontWeight: 600, color: C.ink, margin: "0 0 10px" }}>Producciones por entregar</h3>
+        {porEntregar.length === 0 ? <EmptyState text="No hay producciones pendientes de entrega." /> : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+            {porEntregar.map((m) => {
+              const hoy = new Date().toISOString().slice(0, 10);
+              const vencido = m.fechaEntrega && m.fechaEntrega < hoy;
+              return (
+                <div key={m.id} style={{ background: "#fff", border: `1px solid ${vencido ? C.danger : C.border}`, borderRadius: 8, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontFamily: SANS, fontSize: 13 }}>
+                    <strong>{m.detalle}</strong>
+                    {m.monto > 0 && <span style={{ color: C.gray }}> · ${m.monto.toLocaleString("es-CO")}</span>}
+                    {m.fechaEntrega && (
+                      <div style={{ marginTop: 2, color: vencido ? C.danger : C.gray, fontWeight: vencido ? 700 : 400 }}>
+                        {vencido ? "Vencida — debía entregarse el " : "Entrega programada: "}
+                        {new Date(m.fechaEntrega + "T00:00:00").toLocaleDateString("es-CO")}
+                      </div>
+                    )}
+                  </div>
+                  <Btn variant="secondary" onClick={() => onMarcarEntregado(m.id)}><Truck size={13} /> Marcar como entregado</Btn>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <h3 style={{ fontFamily: SANS, fontSize: 14, fontWeight: 600, color: C.ink, margin: "0 0 10px" }}>Cuenta pendiente por cobrar</h3>
+        {entregadasSinFacturar.length === 0 ? <EmptyState text="No hay entregas pendientes de facturar." /> : (
+          <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px", marginBottom: 20 }}>
+            {entregadasSinFacturar.map((m) => (
+              <div key={m.id} style={{ display: "flex", justifyContent: "space-between", fontFamily: SANS, fontSize: 12.5, color: C.gray, padding: "4px 0" }}>
+                <span>{m.detalle}</span>
+                <span>${(m.monto || 0).toLocaleString("es-CO")}</span>
+              </div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}`, fontFamily: SANS }}>
+              <strong>Total a facturar</strong>
+              <strong>${totalPendiente.toLocaleString("es-CO")}</strong>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <Btn variant="primary" onClick={generar}><Receipt size={14} /> Generar factura</Btn>
+            </div>
+          </div>
+        )}
+
+        <h3 style={{ fontFamily: SANS, fontSize: 14, fontWeight: 600, color: C.ink, margin: "0 0 10px" }}>Facturas</h3>
+        {facturasTaller.length === 0 ? <EmptyState text="Todavía no se ha generado ninguna factura para este taller." /> : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {facturasTaller.map((f) => {
+              const abierta = facturaAbierta === f.id;
+              return (
+                <div key={f.id} style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+                  <div style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => setFacturaAbierta(abierta ? null : f.id)}>
+                    <div style={{ fontFamily: SANS }}>
+                      <strong style={{ fontSize: 14, color: C.ink }}>${f.total.toLocaleString("es-CO")}</strong>
+                      <span style={{ fontSize: 12, color: C.gray, marginLeft: 10 }}>{f.fecha ? new Date(f.fecha).toLocaleDateString("es-CO") : ""}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <Badge text={f.estado === "pagada" ? "Pagada" : "Pendiente de pago"} tone={f.estado === "pagada" ? "ok" : "warning"} />
+                      <ChevronRight size={15} style={{ transform: abierta ? "rotate(90deg)" : "none", color: C.gray }} />
+                    </div>
+                  </div>
+                  {abierta && (
+                    <div style={{ borderTop: `1px solid ${C.border}`, padding: "14px 16px", background: C.creamLight }}>
+                      {itemsFactura.map((m) => (
+                        <div key={m.id} style={{ display: "flex", justifyContent: "space-between", fontFamily: SANS, fontSize: 12.5, color: C.ink, padding: "3px 0" }}>
+                          <span>{m.detalle}</span>
+                          <span>${(m.monto || 0).toLocaleString("es-CO")}</span>
+                        </div>
+                      ))}
+                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}`, fontFamily: SANS }}>
+                        <strong>Total</strong>
+                        <strong>${f.total.toLocaleString("es-CO")}</strong>
+                      </div>
+
+                      {f.estado === "pagada" ? (
+                        <div style={{ marginTop: 14 }}>
+                          <div style={{ fontFamily: SANS, fontSize: 12, color: C.gray, marginBottom: 6 }}>
+                            Pagada el {f.pagadaAt ? new Date(f.pagadaAt).toLocaleString("es-CO") : ""}
+                          </div>
+                          {f.firmaDibujo ? (
+                            <img src={f.firmaDibujo} alt="Firma" style={{ maxWidth: 300, border: `1px solid ${C.border}`, borderRadius: 6, background: "#fff" }} />
+                          ) : (
+                            <div style={{ fontFamily: SANS, fontSize: 13, color: C.ink }}>Confirmado por: <strong>{f.confirmadoNombre}</strong></div>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                          <div>
+                            <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: C.ink, marginBottom: 8 }}>Firmar al recibir el pago</div>
+                            <SignaturePad onSave={(dataUrl) => onMarcarPagada(f.id, { firmaDibujo: dataUrl })} />
+                          </div>
+                          <div>
+                            <div style={{ fontFamily: SANS, fontSize: 12.5, fontWeight: 600, color: C.ink, marginBottom: 8 }}>O confirmar sin firma</div>
+                            <Field label="Nombre de quien confirma">
+                              <TxtInput value={nombreConfirma} onChange={(e) => setNombreConfirma(e.target.value)} placeholder="Nombre completo" />
+                            </Field>
+                            <Btn variant="primary" style={{ marginTop: 8 }} onClick={() => { if (nombreConfirma.trim()) { onMarcarPagada(f.id, { confirmadoNombre: nombreConfirma.trim() }); setNombreConfirma(""); } }}>
+                              <Check size={14} /> Confirmar pago recibido
+                            </Btn>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 
 function StockPrendasTab({ prendas, colecciones, talleres, stock }) {
   const [coleccionFiltro, setColeccionFiltro] = useState("todas");
@@ -953,6 +1298,7 @@ export default function App() {
   const [colecciones, setColecciones] = useState([]);
   const [stock, setStock] = useState([]);
   const [movimientos, setMovimientos] = useState([]);
+  const [facturas, setFacturas] = useState([]);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -973,15 +1319,16 @@ export default function App() {
 
   async function refresh() {
     try {
-      const [t, i, p, c, s, m] = await Promise.all([
+      const [t, i, p, c, s, m, f] = await Promise.all([
         supabase.from("talleres").select("*").order("nombre"),
         supabase.from("insumos").select("*"),
         supabase.from("prendas").select("*").order("nombre"),
         supabase.from("colecciones").select("*").order("nombre"),
         supabase.from("prendas_stock").select("*"),
         supabase.from("movimientos").select("*").order("fecha", { ascending: false }),
+        supabase.from("facturas").select("*").order("fecha", { ascending: false }),
       ]);
-      const firstError = t.error || i.error || p.error || c.error || s.error || m.error;
+      const firstError = t.error || i.error || p.error || c.error || s.error || m.error || f.error;
       if (firstError) throw firstError;
       setTalleres(t.data.map(toTaller));
       setInsumos(i.data.map(toInsumo));
@@ -989,6 +1336,7 @@ export default function App() {
       setColecciones(c.data.map(toColeccion));
       setStock(s.data.map(toStock));
       setMovimientos(m.data.map(toMovimiento));
+      setFacturas(f.data.map(toFactura));
       setError(null);
     } catch (e) {
       console.error(e);
@@ -1034,18 +1382,37 @@ export default function App() {
   }
 
   // Prendas
-  async function addPrenda(nombre, coleccionId, consumos) { await supabase.from("prendas").insert({ nombre, coleccion_id: coleccionId, consumos }); await refresh(); }
+  async function addPrenda(nombre, coleccionId, precioConfeccion, consumos) { await supabase.from("prendas").insert({ nombre, coleccion_id: coleccionId, precio_confeccion: precioConfeccion, consumos }); await refresh(); }
   async function deletePrenda(id) { await supabase.from("prendas").delete().eq("id", id); await refresh(); }
 
   // Producción
-  async function registrarProduccion({ tallerId, prendaId, detalle, items, updates, curvaPorTalla }) {
+  async function registrarProduccion({ tallerId, prendaId, detalle, items, updates, curvaPorTalla, unidades, precioUnitario, monto, fechaEntrega }) {
     for (const u of updates) await supabase.from("insumos").update({ cantidad: u.nuevaCantidad }).eq("id", u.insumoId);
     for (const c of curvaPorTalla) {
       const existente = stock.find((s) => s.prendaId === prendaId && s.tallerId === tallerId && s.talla === c.talla);
       const nuevaCantidad = round2((existente?.cantidad || 0) + c.cantidad);
       await supabase.from("prendas_stock").upsert({ prenda_id: prendaId, taller_id: tallerId, talla: c.talla, cantidad: nuevaCantidad }, { onConflict: "prenda_id,taller_id,talla" });
     }
-    await supabase.from("movimientos").insert({ tipo: "produccion", taller_id: tallerId, prenda_id: prendaId, detalle, items });
+    await supabase.from("movimientos").insert({ tipo: "produccion", taller_id: tallerId, prenda_id: prendaId, detalle, items, unidades, precio_unitario: precioUnitario, monto, entregado: false, fecha_entrega: fechaEntrega });
+    await refresh();
+  }
+
+  // Entregas y facturación
+  async function marcarEntregado(movId) {
+    await supabase.from("movimientos").update({ entregado: true, entregado_at: new Date().toISOString() }).eq("id", movId);
+    await refresh();
+  }
+  async function generarFactura(tallerId, movIds, total) {
+    const { data, error } = await supabase.from("facturas").insert({ taller_id: tallerId, total, estado: "pendiente" }).select().single();
+    if (error || !data) { console.error(error); return; }
+    for (const movId of movIds) await supabase.from("movimientos").update({ factura_id: data.id }).eq("id", movId);
+    await refresh();
+  }
+  async function marcarPagada(facturaId, { firmaDibujo, confirmadoNombre }) {
+    await supabase.from("facturas").update({
+      estado: "pagada", pagada_at: new Date().toISOString(),
+      firma_dibujo: firmaDibujo || null, confirmado_nombre: confirmadoNombre || null,
+    }).eq("id", facturaId);
     await refresh();
   }
 
@@ -1066,8 +1433,9 @@ export default function App() {
         {tab === "talleres" && perfil.rol === "gerencia" && <TalleresTab talleres={talleresVisibles} insumos={insumos} onAdd={addTaller} onEdit={editTaller} onDelete={deleteTaller} />}
         {tab === "inventario" && <InventarioTab talleres={talleresVisibles} insumos={insumos} perfil={perfil} onAddInsumo={addInsumo} onEditInsumo={editInsumo} onDeleteInsumo={deleteInsumo} onAddEntrada={addEntrada} onSubirFoto={subirFoto} />}
         {tab === "colecciones" && perfil.rol === "gerencia" && <ColeccionesTab colecciones={colecciones} onAdd={addColeccion} onDelete={deleteColeccion} />}
-        {tab === "prendas" && perfil.rol === "gerencia" && <PrendasTab prendas={prendas} colecciones={colecciones} onAdd={addPrenda} onDelete={deletePrenda} />}
+        {tab === "prendas" && perfil.rol === "gerencia" && <PrendasTab prendas={prendas} colecciones={colecciones} insumos={insumos} onAdd={addPrenda} onDelete={deletePrenda} />}
         {tab === "produccion" && <ProduccionTab talleres={talleresVisibles} insumos={insumos} prendas={prendas} perfil={perfil} onRegistrar={registrarProduccion} />}
+        {tab === "facturacion" && <FacturacionTab talleres={talleresVisibles} prendas={prendas} movimientos={movimientos} facturas={facturas} perfil={perfil} onMarcarEntregado={marcarEntregado} onGenerarFactura={generarFactura} onMarcarPagada={marcarPagada} />}
         {tab === "stock_prendas" && perfil.rol === "gerencia" && <StockPrendasTab prendas={prendas} colecciones={colecciones} talleres={talleresVisibles} stock={stock} />}
         {tab === "historial" && <HistorialTab movimientos={movimientos} talleres={talleresVisibles} />}
         {tab === "reportes" && perfil.rol === "gerencia" && <ReportesTab talleres={talleresVisibles} insumos={insumos} prendas={prendas} movimientos={movimientos} stock={stock} />}

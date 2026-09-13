@@ -37,6 +37,7 @@ create table if not exists prendas (
   id uuid primary key default gen_random_uuid(),
   nombre text not null,
   coleccion_id uuid references colecciones(id) on delete set null,
+  precio_confeccion numeric default 0,
   consumos jsonb default '[]',
   created_at timestamptz default now()
 );
@@ -57,8 +58,30 @@ create table if not exists movimientos (
   taller_id uuid references talleres(id) on delete set null,
   prenda_id uuid references prendas(id) on delete set null,
   detalle text,
-  items jsonb default '[]'
+  items jsonb default '[]',
+  unidades numeric,
+  precio_unitario numeric,
+  monto numeric,
+  entregado boolean default false,
+  entregado_at timestamptz,
+  fecha_entrega date,
+  factura_id uuid
 );
+
+-- Facturas: agrupan producciones entregadas de un taller para cobrar de una vez
+create table if not exists facturas (
+  id uuid primary key default gen_random_uuid(),
+  taller_id uuid references talleres(id) on delete cascade,
+  fecha timestamptz default now(),
+  total numeric default 0,
+  estado text not null default 'pendiente' check (estado in ('pendiente', 'pagada')),
+  firma_dibujo text,
+  confirmado_nombre text,
+  pagada_at timestamptz
+);
+
+alter table movimientos add constraint movimientos_factura_id_fkey
+  foreign key (factura_id) references facturas(id) on delete set null;
 
 -- Perfiles: vincula cada usuario que inicia sesión con su rol y su taller.
 -- 'gerencia' ve y administra todo. 'taller' solo ve y edita lo de su taller.
@@ -91,6 +114,7 @@ alter table prendas enable row level security;
 alter table prendas_stock enable row level security;
 alter table movimientos enable row level security;
 alter table perfiles enable row level security;
+alter table facturas enable row level security;
 
 -- Perfiles
 create policy "ver_perfil_propio_o_gerencia" on perfiles for select
@@ -146,6 +170,16 @@ create policy "ver_movimientos" on movimientos for select
   using (mi_rol() = 'gerencia' or taller_id = mi_taller());
 create policy "crear_movimientos" on movimientos for insert
   with check (mi_rol() = 'gerencia' or taller_id = mi_taller());
+create policy "actualizar_movimientos" on movimientos for update
+  using (mi_rol() = 'gerencia' or taller_id = mi_taller());
+
+-- Facturas: agrupan producciones entregadas para cobrar; misma lógica por taller
+create policy "ver_facturas" on facturas for select
+  using (mi_rol() = 'gerencia' or taller_id = mi_taller());
+create policy "crear_facturas" on facturas for insert
+  with check (mi_rol() = 'gerencia' or taller_id = mi_taller());
+create policy "actualizar_facturas" on facturas for update
+  using (mi_rol() = 'gerencia' or taller_id = mi_taller());
 
 -- ============ FOTOS (Supabase Storage) ============
 -- Después de correr este SQL, crea el bucket manualmente:
